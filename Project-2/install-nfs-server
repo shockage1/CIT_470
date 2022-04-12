@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# Team 4 - Derek, Jalen, Adam
+# Bash script file for installing and configuring NFS
+# CIT 470-001 Spring 2022 - Darci Guriel
+
+# Error catching, will exit script on a non-zero exit code
+# To avoid script exiting improperly with correct behaviour, use "|| true" after offending command
+set -eE
+trap 'catch $? ${LINENO}' ERR
+
+# Function for displaying script usage
+usage() {
+  echo "Usage: install-nfs-server [ -h | --help ]
+                          [ -n | --network [IP_ADDRESS] ]"
+  exit 2
+}
+
+# Function for displaying help when invoked by -h option
+helpPage() {
+  echo "Usage: install-nfs-server [ -h | --help ]
+                          [ -n | --network [IP_ADDRESS] ]
+Automated bash install script for NFS Services
+Uses defined IP network for NFS filesystem exports
+
+  -h, --help                  displays this help page
+  -n, --network               takes network addresses in CIDR format
+                              or with long netmask
+                              e.g., '--network 10.2.6.1/23' or
+                              '--network 10.2.6.1/255.255.254.0'"
+}
+
+# Exit the script if no arguments are supplied
+if [ $# -eq 0 ]; then
+  usage
+  exit 2
+fi
+
+# Option parameters
+options=$(getopt -o 'hn:' -l 'help,network:' -- "$@")
+eval set -- "$options"
+while true; do
+    case "$1" in
+    -h | --help)
+        helpPage;
+        exit 0;
+        ;;
+    -n | --network)
+        NETWORK="$2";
+        TESTNETWORK="$2"; # Used for test constructs, regex, and modifying
+        # Regex for determining correct IP address inputs, needs subnet mask otherwise exit
+        [[ "$TESTNETWORK" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\/[0-9]{1,2}$ || "$TESTNETWORK" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] || { echo "IP Address is invalid. Please try again"; exit 2; }
+        # Hacky fix for making long netmask work with ipcalc
+        if [[ "$TESTNETWORK" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\/[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+        TESTNETWORK="`echo $TESTNETWORK | tr '/' ' '`" # change / to space so ipcalc can use it 
+        fi
+        # Use ipcalc to determine if valid IP address/network, otherwise exit
+        ipcalc -c $TESTNETWORK || { echo "IP Address is invalid. Please try again"; exit 1; }
+        break;;
+    --) shift; break;;
+    esac
+done
+
+# Redirect all stdout and stderr to log file
+exec 3>&1 # Stream 3 is used to output messages
+exec 1>"$0".log 2>&1
+# All output below will go to the file 'install-nfs-server.log':
+
+# Set up a new partition for /home in a drive
+function partitionDrive {
+    echo "Partitioning the drive for /home..."
+    echo "Partitioning the drive for /home..." >&3
+    yum -y install nfs-utils
+    # Use echo inputs to pipe into fdisk which is normally interactive and make it scriptable
+    # Creates new partition on first storage device using rest of free space
+    (
+    echo m;
+    echo n;
+    echo p;
+    echo "";
+    echo "";
+    sleep 5;
+    echo w;
+    ) | fdisk /dev/sda || true
+    # Update kernel of new partition
+    partprobe /dev/sda
+    # Create xfs filesystem on new partition
+    mkfs.xfs -f /dev/sda4
+    xfs_repair /dev/sda4
+}
+
+# Set up home directory on new partition and migrate data
+function setupHomeDir {
+    echo "Setting up /home directory..."
+    echo "Setting up /home directory..." >&3
+    # Temp backup of /home data
+    cp -r /home /tmp/oldhome
+    rm -rf /home/*
+    # Mount /home to new partition
+    mount /dev/sda4 /home
+    # Restore data to /home
+    mv /tmp/oldhome/* /home
+    # Comment out any lines using /home in /etc/fstab
+    sed -i '/home/s/^/#/' /etc/fstab
+    # Add /home entry in fstab
+    echo "/dev/sda4                                 /home                   xfs     defaults        0 0" >> /etc/fstab
+    echo "/home $NETWORK(rw)" >> /etc/exports
+    exportfs -a
+    exportfs -v # For logging purposes
+}
+
+# Configure the firewall to allow incoming connections on portmapper, mountd, and NFS ports
+function firewallConfiguration {
+    echo "Configuring firewall rules..."
+    echo "Configuring firewall rules..." >&3
+    firewall-cmd --zone=public --add-port=2049/tcp --permanent
+    firewall-cmd --zone=public --add-port=111/tcp --permanent
+    firewall-cmd --zone=public --add-port=20048/tcp --permanent
+    firewall-cmd --zone=public --add-port=2049/udp --permanent
+    firewall-cmd --zone=public --add-port=111/udp --permanent
+    firewall-cmd --zone=public --add-port=20048/udp --permanent
+    firewall-cmd --reload
+}
+
+# Starts the NFS Service
+function startNFS {
+    echo "Starting NFS..."
+    echo "Starting NFS..." >&3
+    systemctl start nfs
+    echo "Finished!"
+    echo "Finished!" >&3
+}
+
+# Output non-zero exit code with offending line in script
+function catch {
+  if [ "$1" != "0" ]; then
+    echo "Error $1 occurred on line $2"
+    echo "Error $1 occurred on line $2" >&3
+  fi
+}
+
+# Execute main functions
+partitionDrive
+setupHomeDir
+firewallConfiguration
+startNFS
+exit 0
