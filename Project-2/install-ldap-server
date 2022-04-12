@@ -42,7 +42,7 @@ function LDAPsetup {
     yum -y install openldap-servers openldap-clients
     systemctl start slapd
     # Get db.ldif to configure olcDatabase={2}hdb.ldif
-    wget http://studenthome.hh.nku.edu/~disibiod1/db.ldif
+    wget https://raw.githubusercontent.com/shockage1/CIT_470/main/Project-2/db.ldif
     ldapmodify -v -Y EXTERNAL -H ldapi:/// -f db.ldif
     echo 'olcAccess: {0}to attrs=userPassword, by self write by anonymous auth by * none' >> /etc/openldap/slapd.d/cn=config/olcDatabase={2}hdb.ldif
     echo 'olcAccess: {1} to * by self write by * read' >> /etc/openldap/slapd.d/cn=config/olcDatabase={2}hdb.ldif
@@ -70,7 +70,7 @@ function migrateData {
     ldapadd -v -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/inetorgperson.ldif || true
     systemctl stop slapd.service
     # Get base.ldif file and add base data
-    wget http://studenthome.hh.nku.edu/~disibiod1/base.ldif
+    wget https://raw.githubusercontent.com/shockage1/CIT_470/main/Project-2/base.ldif
     slapadd -v -l base.ldif
     /usr/share/migrationtools/migrate_passwd.pl /etc/passwd > passwd.ldif
     /usr/share/migrationtools/migrate_group.pl /etc/group > group.ldif
