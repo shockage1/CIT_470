@@ -1,0 +1,135 @@
+#!/bin/bash
+
+# Team 4 - Derek, Jalen, Adam
+# Bash script file for installing and configuring LDAP
+# CIT 470-001 Spring 2022 - Darci Guriel
+
+# Error catching, will exit script on a non-zero exit code
+# To avoid script exiting improperly with correct behaviour, use "|| true" after offending command
+set -eE
+trap 'catch $? $LINENO' ERR
+
+# Function for displaying help when invoked by -h option
+helpPage() {
+  echo "Usage: install-ldap-server [ -h | --help ]
+Automated bash install script for LDAP services
+
+  -h, --help                  displays this help page"
+}
+
+# Option parameters
+options=$(getopt -o h -l help -- "$@")
+eval set -- "$options"
+while true; do
+    case "$1" in
+    -h | --help)
+        helpPage;
+        exit 0;
+        ;;
+    --) shift; break;;
+    esac
+done
+
+# Redirect all stdout and stderr to log files
+exec 3>&1 # Stream 3 is used to output messages
+exec 1>"$0".log 2>&1
+# All output below will go to the file 'install-ldap-server.log':
+
+# Download necessary packages to install LDAP
+function LDAPsetup {
+    echo "Installing LDAP..."
+    echo "Installing LDAP..." >&3
+    yum -y install openldap-servers openldap-clients
+    systemctl start slapd
+    # Get db.ldif to configure olcDatabase={2}hdb.ldif
+    wget http://studenthome.hh.nku.edu/~disibiod1/db.ldif
+    ldapmodify -v -Y EXTERNAL -H ldapi:/// -f db.ldif
+    echo 'olcAccess: {0}to attrs=userPassword, by self write by anonymous auth by * none' >> /etc/openldap/slapd.d/cn=config/olcDatabase={2}hdb.ldif
+    echo 'olcAccess: {1} to * by self write by * read' >> /etc/openldap/slapd.d/cn=config/olcDatabase={2}hdb.ldif
+    # Restart to update slapd
+    systemctl restart slapd
+    # Get rid of old databases
+    rm -f /var/lib/ldap/*
+    cp /usr/share/openldap-servers/DB_CONFIG.example /var/lib/ldap/DB_CONFIG
+}
+
+# Migrate account and group data
+function migrateData {
+    # Install migration tools
+    echo "Installing NSS and migrationtools..."
+    echo "Installing NSS and migrationtools..." >&3
+    yum -y install nss_ldap
+    yum -y install migrationtools
+    # Edit migrate_common to correct config
+	sed -i 's/$DEFAULT_MAIL_DOMAIN = "padl.com";/$DEFAULT_MAIL_DOMAIN = "sp22-group4-server1.hh.nku.edu";/' /usr/share/migrationtools/migrate_common.ph
+	sed -i 's/$DEFAULT_BASE = "dc=padl,dc=com";/$DEFAULT_BASE = "dc=cit470,dc=nku,dc=edu";/' /usr/share/migrationtools/migrate_common.ph
+    # Add schemas to support object classes and attributes found in our base.ldif file
+    ldapadd -v -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/core.ldif || true
+    ldapadd -v -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/cosine.ldif || true
+    ldapadd -v -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/nis.ldif || true
+    ldapadd -v -Y EXTERNAL -H ldapi:/// -f /etc/openldap/schema/inetorgperson.ldif || true
+    systemctl stop slapd.service
+    # Get base.ldif file and add base data
+    wget http://studenthome.hh.nku.edu/~disibiod1/base.ldif
+    slapadd -v -l base.ldif
+    /usr/share/migrationtools/migrate_passwd.pl /etc/passwd > passwd.ldif
+    /usr/share/migrationtools/migrate_group.pl /etc/group > group.ldif
+    slapadd -v -l passwd.ldif
+    slapadd -v -l group.ldif
+    chown -R ldap:ldap /var/lib/ldap
+}
+
+# Download, install, and place "diradm" in the correct place. This is a script to manage users and groups stored in LDAP directory
+function diradmInstall {
+    # Install diradm
+    echo "Downloading and installing diradm..."
+    echo "Downloading and installing diradm..." >&3
+    wget http://www.hits.at/diradm/diradm-1.3.tar.gz
+    tar zxvf ./diradm-1.3.tar.gz -C /tmp
+    # Don't need anymore
+    rm -f ./diradm-1.3.tar.gz
+    # Move config file to /etc and diradm executable inside our PATH
+    mv /tmp/diradm-1.3/diradm.conf /etc
+    mv /tmp/diradm-1.3/diradm /usr/sbin
+    # Remove leftover temp files
+    rm -rf /tmp/diradm-1.3
+    # Configure diradm.conf with LDAP DNs
+    sed -i 's/BINDDN="cn=Admin,o=System"/BINDDN="cn=Manager,dc=cit470,dc=nku,dc=edu"/' /etc/diradm.conf
+    sed -i 's/USERBASE="ou=Users,ou=Accounts,o=System"/USERBASE="ou=People,dc=cit470,dc=nku,dc=edu"/' /etc/diradm.conf
+    sed -i 's/GROUPBASE="ou=Groups,ou=Accounts,o=System"/GROUPBASE="ou=Group,dc=cit470,dc=nku,dc=edu"/' /etc/diradm.conf
+}
+
+# Configure the firewall to allow incoming connections on LDAP ports
+function FirewallConfiguration {
+    echo "Configuring firewall rules for LDAP/LDAPS..."
+    echo "Configuring firewall rules for LDAP/LDAPS..." >&3
+    firewall-cmd --permanent --add-service=ldap
+    firewall-cmd --permanent --add-service=ldaps
+    firewall-cmd --reload
+}
+
+# Starts the LDAP Service
+function startLDAP {
+    echo "Starting LDAP..."
+    echo "Starting LDAP..." >&3
+    systemctl start slapd
+    echo "Finished!"
+    echo "Finished!" >&3
+}
+
+# Output non-zero exit code with offending line in script
+function catch {
+  if [ "$1" != "0" ]; then
+    echo "Error $1 occurred on line $2"
+    echo "Error $1 occurred on line $2" >&3
+    echo ""
+  fi
+}
+
+# Execute main functions
+LDAPsetup
+migrateData
+diradmInstall
+FirewallConfiguration
+startLDAP
+exit 0
