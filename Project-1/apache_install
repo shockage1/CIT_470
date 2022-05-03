@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# Team 4 - Derek Disibio
+# Bash script file for installing and configuring Apache 2.4.52
+# CIT 470-001 Spring 2022 - Darci Guriel
+
+# Redirect all stdout and stderr to log file
+exec 3>&1 # Stream 3 is used to output messages
+exec 1>"$0".log 2>&1
+# All output below will go to the file 'apache_install.log':
+
+# Download necessary packages to compile and install Apache
+function ApacheSetup {
+    echo "Downloading necessary libraries..."
+    echo "Downloading necessary libraries..." >&3
+    yum -y install gcc openssl-devel make expat-devel
+    echo "Downloading Apache packages..."
+    echo "Downloading Apache packages..." >&3
+    wget https://dlcdn.apache.org//httpd/httpd-2.4.52.tar.gz
+    tar xzvf httpd-2.4.52.tar.gz
+    cd ./httpd-2.4.52
+    wget https://dlcdn.apache.org//apr/apr-1.7.0.tar.gz https://dlcdn.apache.org//apr/apr-util-1.6.1.tar.gz
+    tar xzvf apr-1.7.0.tar.gz -C ./srclib
+    tar xzvf apr-util-1.6.1.tar.gz -C ./srclib
+    mv ./srclib/apr-1.7.0 ./srclib/apr
+    mv ./srclib/apr-util-1.6.1 ./srclib/apr-util
+    rm -f ./apr-1.7.0.tar.gz ./apr-util-1.6.1.tar.gz ../httpd-2.4.52.tar.gz
+    echo "Running Apache configure script..."
+    echo "Running Apache configure script..." >&3
+    ./configure --with-included-apr --enable-ssl --enable-rewrite
+    echo "Compiling Apache with make..."
+    echo "Compiling Apache with make..." >&3
+    make
+    echo "Installing Apache with make..."
+    echo "Installing Apache with make..." >&3
+    make install
+}
+
+# Configure httpd.conf and SSL in Apache
+function ApacheConfiguration {
+    echo "Configuring Apache..."
+    echo "Configuring Apache..." >&3
+    sed -i "s/ServerAdmin you@example.com/ServerAdmin cit470.sp2022.team.4@gmail.com/" /usr/local/apache2/conf/httpd.conf
+    sed -i "s/#ServerName www.example.com:80/ServerName 10.2.6.84:80/" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#LoadModule socache_shmcb_module modules/mod_socache_shmcb.so;LoadModule socache_shmcb_module modules/mod_socache_shmcb.so;" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#LoadModule rewrite_module modules/mod_rewrite.so;LoadModule rewrite_module modules/mod_rewrite.so;" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#LoadModule userdir_module modules/mod_userdir.so;LoadModule userdir_module modules/mod_userdir.so;" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#LoadModule ssl_module modules/mod_ssl.so;LoadModule ssl_module modules/mod_ssl.so;" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#Include conf/extra/httpd-userdir.conf;Include conf/extra/httpd-userdir.conf;" /usr/local/apache2/conf/httpd.conf
+    sed -i "s;#Include conf/extra/httpd-ssl.conf;Include conf/extra/httpd-ssl.conf;" /usr/local/apache2/conf/httpd.conf
+    echo -e '\n# Rewrite Rules for HomeDir' >> /usr/local/apache2/conf/httpd.conf
+    echo 'RewriteEngine On' >> /usr/local/apache2/conf/httpd.conf
+    echo 'RewriteRule ^/users/(.*)$ https://%{SERVER_NAME}/~$1 [R]' >> /usr/local/apache2/conf/httpd.conf
+    echo "Generating SSL credentials..."
+    echo "Generating SSL credentials..." >&3
+    openssl req -x509 -newkey rsa:2048 -subj "/C=US/ST=Kentucky/L=Highland Heights/O=NKU/CN=$HOSTNAME" -keyout /usr/local/apache2/conf/server.key -nodes -out /usr/local/apache2/conf/server.crt -days 420
+}
+
+# Configure the firewall to allow incoming connections on HTTP ports
+function FirewallConfiguration {
+    echo "Configuring firewall rules..."
+    echo "Configuring firewall rules..." >&3
+    firewall-cmd --permanent --add-port=80/tcp
+    firewall-cmd --permanent --add-port=443/tcp
+    firewall-cmd --reload
+}
+
+# Set up user home directories with correct permission
+function UserDirSetup {
+    echo "Configuring user home directories..."
+    echo "Configuring user home directories..." >&3
+    sed -i "s/UMASK           077/UMASK           066/" /etc/login.defs # Fix default home folder permissions
+    mkdir /etc/skel/public_html # Have public_html folder be in default home folder setup for new users
+}
+
+# Starts the Apache Service
+function startApache {
+    echo "Starting Apache..."
+    echo "Starting Apache..." >&3
+    /usr/local/apache2/bin/apachectl start
+    echo "Finished!"
+    echo "Finished!" >&3
+}
+
+# Execute main functions
+ApacheSetup
+ApacheConfiguration
+FirewallConfiguration
+UserDirSetup
+startApache
